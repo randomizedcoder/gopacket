@@ -93,8 +93,9 @@ type IGMP struct {
 
 // IGMPv1or2 stores header details for an IGMPv1 or IGMPv2 packet.
 //
-//  0                   1                   2                   3
-//  0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+//	0                   1                   2                   3
+//	0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+//
 // +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 // |      Type     | Max Resp Time |           Checksum            |
 // +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
@@ -204,8 +205,9 @@ func (i *IGMP) decodeIGMPv3MembershipReport(data []byte) error {
 	return nil
 }
 
-//  0                   1                   2                   3
-//  0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+//	0                   1                   2                   3
+//	0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+//
 // +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 // |  Type = 0x11  | Max Resp Code |           Checksum            |
 // +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
@@ -251,9 +253,34 @@ func igmpTimeDecode(t uint8) time.Duration {
 	if t&0x80 == 0 {
 		return time.Millisecond * 100 * time.Duration(t)
 	}
-	mant := (t & 0x70) >> 4
-	exp := t & 0x0F
-	return time.Millisecond * 100 * time.Duration((mant|0x10)<<(exp+3))
+	exp := (t & 0x70) >> 4
+	mant := t & 0x0F
+	return time.Millisecond * 100 * time.Duration((uint64(mant)|0x10)<<(exp+3))
+}
+
+func igmpTimeEncode(t time.Duration) uint8 {
+	// in units of 1/10 second
+	tm := t.Milliseconds() / 100
+	if t < 128 {
+		return uint8(tm)
+	}
+	//  0 1 2 3 4 5 6 7
+	// +-+-+-+-+-+-+-+-+
+	// |1| exp | mant  |
+	// +-+-+-+-+-+-+-+-+
+	// Max Resp Time = (mant | 0x10) << (exp + 3)
+	var expPlus3, mant, r uint8
+	// range of 3 bit integer plus 3
+	for expPlus3 = 3; expPlus3 < 11; expPlus3++ {
+		if (tm>>expPlus3)&0x1f == (tm >> expPlus3) {
+			break
+		}
+	}
+
+	mant = uint8((tm >> expPlus3) & 0x0f)
+	r = ((expPlus3-3)|0x08)<<4 + mant&0x0f
+
+	return r
 }
 
 // LayerType returns LayerTypeIGMP for the V1,2,3 message protocol formats.
@@ -270,6 +297,20 @@ func (i *IGMPv1or2) DecodeFromBytes(data []byte, df gopacket.DecodeFeedback) err
 	i.Checksum = binary.BigEndian.Uint16(data[2:4])
 	i.GroupAddress = net.IP(data[4:8])
 
+	return nil
+}
+
+func (i *IGMPv1or2) SerializeTo(b gopacket.SerializeBuffer, opts gopacket.SerializeOptions) error {
+
+	bytes, err := b.PrependBytes(8)
+	if err != nil {
+		return err
+	}
+
+	bytes[0] = byte(i.Type)
+	bytes[1] = igmpTimeEncode(i.MaxResponseTime)
+	binary.BigEndian.PutUint16(bytes[2:], i.Checksum)
+	copy(bytes[4:8], i.GroupAddress)
 	return nil
 }
 

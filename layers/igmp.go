@@ -309,9 +309,39 @@ func (i *IGMPv1or2) SerializeTo(b gopacket.SerializeBuffer, opts gopacket.Serial
 
 	bytes[0] = byte(i.Type)
 	bytes[1] = igmpTimeEncode(i.MaxResponseTime)
-	binary.BigEndian.PutUint16(bytes[2:], i.Checksum)
 	copy(bytes[4:8], i.GroupAddress)
+	if opts.ComputeChecksums {
+		csum := i.checksum(b.Bytes())
+		if err != nil {
+			return err
+		}
+		i.Checksum = csum
+	}
+	binary.BigEndian.PutUint16(bytes[2:], i.Checksum)
 	return nil
+}
+
+func (i *IGMPv1or2) checksum(bytes []byte) uint16 {
+	// Clear checksum bytes
+	bytes[2] = 0
+	bytes[3] = 0
+
+	// Compute checksum
+	var csum uint32
+	for i := 0; i < len(bytes); i += 2 {
+		csum += uint32(bytes[i]) << 8
+		csum += uint32(bytes[i+1])
+	}
+	for {
+		// Break when sum is less or equals to 0xFFFF
+		if csum <= 65535 {
+			break
+		}
+		// Add carry to the sum
+		csum = (csum >> 16) + uint32(uint16(csum))
+	}
+	// Flip all the bits
+	return ^uint16(csum)
 }
 
 func (i *IGMPv1or2) NextLayerType() gopacket.LayerType {
